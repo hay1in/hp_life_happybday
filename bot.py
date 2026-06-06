@@ -5,7 +5,7 @@ from datetime import datetime
 from pathlib import Path
 
 from telegram import Update
-from telegram.ext import Updater, CommandHandler, CallbackContext
+from telegram.ext import Application, CommandHandler, ContextTypes
 
 TOKEN = os.environ.get("BOT_TOKEN")
 CHAT_ID = int(os.environ.get("CHAT_ID", 468617242))
@@ -14,6 +14,8 @@ DATA_FILE = "birthdays.json"
 if not TOKEN:
     print("❌ Ошибка: BOT_TOKEN не задан")
     exit(1)
+
+print(f"✅ Бот запускается с CHAT_ID: {CHAT_ID}")
 
 def load_birthdays():
     if not Path(DATA_FILE).exists():
@@ -36,29 +38,29 @@ def parse_date(date_str):
     else:
         raise ValueError("Нужно ДД.ММ или ДД.ММ.ГГГГ")
 
-def start(update: Update, context: CallbackContext):
-    update.message.reply_text(
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
         "🎂 Привет! Я напоминаю о днях рождения.\n\n"
         "/add Имя ДД.ММ — добавить\n"
         "/list — список всех ДР\n"
         "/remove Имя — удалить"
     )
 
-def add_birthday(update: Update, context: CallbackContext):
+async def add_birthday(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
-        update.message.reply_text("❌ Пример: /add Анна 15.08")
+        await update.message.reply_text("❌ Пример: /add Анна 15.08")
         return
     try:
         date_str = context.args[-1]
         name = " ".join(context.args[:-1])
         day, month, year = parse_date(date_str)
     except Exception as e:
-        update.message.reply_text(f"❌ Ошибка: {e}")
+        await update.message.reply_text(f"❌ Ошибка: {e}")
         return
 
     data = load_birthdays()
     if name in data:
-        update.message.reply_text(f"⚠️ {name} уже есть")
+        await update.message.reply_text(f"⚠️ {name} уже есть")
         return
 
     data[name] = {
@@ -68,34 +70,34 @@ def add_birthday(update: Update, context: CallbackContext):
         "full_date": f"{day:02d}.{month:02d}"
     }
     save_birthdays(data)
-    update.message.reply_text(f"✅ Добавлен: {name} ({data[name]['full_date']})")
+    await update.message.reply_text(f"✅ Добавлен: {name} ({data[name]['full_date']})")
 
-def list_birthdays(update: Update, context: CallbackContext):
+async def list_birthdays(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = load_birthdays()
     if not data:
-        update.message.reply_text("📭 Список пуст.")
+        await update.message.reply_text("📭 Список пуст.")
         return
 
     msg = "🎈 *Список ДР:*\n\n"
     for name, info in data.items():
         msg += f"• {name} — {info['full_date']}\n"
     
-    update.message.reply_text(msg, parse_mode="Markdown")
+    await update.message.reply_text(msg, parse_mode="Markdown")
 
-def remove_birthday(update: Update, context: CallbackContext):
+async def remove_birthday(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
-        update.message.reply_text("❌ Пример: /remove Анна")
+        await update.message.reply_text("❌ Пример: /remove Анна")
         return
     name = " ".join(context.args)
     data = load_birthdays()
     if name not in data:
-        update.message.reply_text(f"❌ {name} не найден")
+        await update.message.reply_text(f"❌ {name} не найден")
         return
     del data[name]
     save_birthdays(data)
-    update.message.reply_text(f"🗑 Удалён: {name}")
+    await update.message.reply_text(f"🗑 Удалён: {name}")
 
-def send_monthly_reminder(context: CallbackContext):
+async def send_monthly_reminder(context: ContextTypes.DEFAULT_TYPE):
     data = load_birthdays()
     if not data:
         return
@@ -131,23 +133,32 @@ def send_monthly_reminder(context: CallbackContext):
     
     message += "Не забудь собрать дань! ლ(ಠ_ಠ ლ)"
     
-    context.bot.send_message(chat_id=CHAT_ID, text=message, parse_mode="Markdown")
+    await context.bot.send_message(chat_id=CHAT_ID, text=message, parse_mode="Markdown")
+    print(f"✅ Отправлено напоминание: {len(birthdays_this_month)} человек")
 
-def main():
-    updater = Updater(TOKEN, use_context=True)
-    dp = updater.dispatcher
+async def main():
+    app = Application.builder().token(TOKEN).build()
     
-    dp.add_handler(CommandHandler("start", start))
-    dp.add_handler(CommandHandler("add", add_birthday))
-    dp.add_handler(CommandHandler("list", list_birthdays))
-    dp.add_handler(CommandHandler("remove", remove_birthday))
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("add", add_birthday))
+    app.add_handler(CommandHandler("list", list_birthdays))
+    app.add_handler(CommandHandler("remove", remove_birthday))
     
-    jq = updater.job_queue
-    jq.run_daily(send_monthly_reminder, time=datetime.strptime("10:00", "%H:%M").time())
+    job_queue = app.job_queue
+    if job_queue:
+        job_queue.run_daily(send_monthly_reminder, time=datetime.strptime("10:00", "%H:%M").time())
     
     print("🤖 Бот запущен!")
-    updater.start_polling()
-    updater.idle()
+    
+    await app.initialize()
+    await app.start()
+    await app.updater.start_polling()
+    
+    try:
+        await asyncio.Event().wait()
+    except KeyboardInterrupt:
+        await app.stop()
+        await app.shutdown()
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
